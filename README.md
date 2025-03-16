@@ -37,6 +37,9 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
    - 設定したMarkdownフォルダ内に `.md` ファイルが生成される
    - 画像は設定したフォルダに保存され、Markdown内で `![[...]]` としてリンクされる
 
+
+[Youtubeで簡単なデモ: https://www.youtube.com/watch?v=JLmnChX2uIk](https://www.youtube.com/watch?v=JLmnChX2uIk)
+
 ## 注意事項
 - Mistral APIの利用にはAPIキーが必要です。
 - OCRの精度はMistral APIのバージョンや品質によって異なります。
