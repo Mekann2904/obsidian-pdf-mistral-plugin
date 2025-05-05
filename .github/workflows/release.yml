@@ -24,6 +24,17 @@ jobs:
       - name: Build plugin
         run: npm run build
 
+      # manifest.json の version をタグに同期
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Sync manifest version
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          VERSION="${TAG#v}"
+          jq --arg v "$VERSION" '.version = $v' manifest.json > manifest.tmp.json
+          mv manifest.tmp.json manifest.json
+
       # 必要なファイルを ZIP にまとめる
       - name: Package plugin
         run: |
