@@ -28,7 +28,7 @@ jobs:
       - name: Package plugin
         run: |
           PLUGIN_NAME="obsidian-smart-pdf-mistral-plugin"
-          mkdir "$PLUGIN_NAME"
+          mkdir -p "$PLUGIN_NAME"
           cp main.js "$PLUGIN_NAME/"
           cp manifest.json "$PLUGIN_NAME/"
           cp styles.css "$PLUGIN_NAME/"
