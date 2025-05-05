@@ -39,9 +39,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF##*/}"
-
           gh release create "$TAG" \
             --title="Release $TAG" \
             --notes="New release of $PLUGIN_NAME" \
             --draft \
-            obsidian-smart-pdf-mistral-plugin.zip
+            obsidian-smart-pdf-mistral-plugin.zip \
+            main.js \
+            manifest.json \
+            styles.css
+
