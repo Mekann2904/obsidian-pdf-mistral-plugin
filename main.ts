@@ -112,10 +112,18 @@ export default class PDFToMarkdownPlugin extends Plugin {
    * Mistral APIを使ってPDFをOCRする共通の内部ロジック
    */
   async processPDFInternal(pdfContent: ArrayBuffer, pdfBaseName: string, originalFileName: string): Promise<void> {
-    const mdFolder = this.settings.markdownOutputFolder.trim();
-    if (mdFolder) {
-      await this.createFolderIfNotExists(mdFolder);
+    // ★★★★★ ここからが修正箇所 ★★★★★
+    // 安全装置：処理の最初に、同名ファイルがVault内に存在しないか最終チェック
+    const targetMdName = `${pdfBaseName}.md`;
+    const existingMdFile = this.app.vault.getMarkdownFiles().find(f => f.name === targetMdName);
+
+    if (existingMdFile) {
+      // ファイルが既に存在する場合、上書きを防ぐために処理を中断し、ユーザーに通知
+      new Notice(`Error: "${targetMdName}" already exists. Processing stopped.`, 7000);
+      return;
     }
+    // ★★★★★ ここまでが修正箇所 ★★★★★
+
     const apiKey = this.settings.mistralApiKey.trim();
     if (!apiKey) {
       throw new Error("Mistral API key is not set in settings.");
@@ -153,6 +161,10 @@ export default class PDFToMarkdownPlugin extends Plugin {
       console.error(`Error during OCR process for file: ${originalFileName}`, err);
       throw err;
     }
+    const mdFolder = this.settings.markdownOutputFolder.trim();
+    if (mdFolder) {
+      await this.createFolderIfNotExists(mdFolder);
+    }
     const baseFolder = this.settings.imagesOutputFolder.trim();
     const folderName = this.settings.imagesFolderName.trim() || "pdf-mistral-images";
     let finalImagesPath = "";
@@ -165,10 +177,12 @@ export default class PDFToMarkdownPlugin extends Plugin {
     }
     await this.createFolderIfNotExists(finalImagesPath);
     const finalMd = await this.combineMarkdownWithImages(ocrResponse, pdfBaseName, finalImagesPath);
+
+    // ファイルが存在しないことが確認済みのため、設定に基づいたパスに新規作成
     const mdFilePath = mdFolder
-      ? `${mdFolder}/${pdfBaseName}.md`
-      : `${pdfBaseName}.md`;
-    await this.createOrUpdateFile(mdFilePath, finalMd);
+      ? `${mdFolder}/${targetMdName}`
+      : targetMdName;
+    await this.app.vault.create(mdFilePath, finalMd);
   }
 
   /**
@@ -236,18 +250,6 @@ export default class PDFToMarkdownPlugin extends Plugin {
   }
 
   /**
-   * 指定のファイルパスが存在すれば更新、無ければ作成
-   */
-  async createOrUpdateFile(filePath: string, content: string): Promise<void> {
-    const existing = this.app.vault.getAbstractFileByPath(filePath);
-    if (existing && existing instanceof TFile) {
-      await this.app.vault.modify(existing, content);
-    } else {
-      await this.app.vault.create(filePath, content);
-    }
-  }
-
-  /**
    * Base64文字列(形式: "data:image/jpeg;base64,...")をバイナリに変換し、Vault内に書き込む
    */
   async saveBase64Image(base64: string, filePath: string): Promise<void> {
@@ -296,7 +298,9 @@ class PDFSelectionModal extends Modal {
             return;
         }
 
-        const mdFolder = this.plugin.settings.markdownOutputFolder;
+        // Vault内の全Markdownファイル名一覧を先に取得し、高速で検索できるようにSetに格納
+        const allMarkdownFileNames = new Set(this.app.vault.getMarkdownFiles().map(f => f.name));
+
         const tableContainer = contentEl.createDiv({ cls: 'pdf-list-container' });
         tableContainer.style.maxHeight = '50vh';
         tableContainer.style.overflowY = 'auto';
@@ -314,8 +318,10 @@ class PDFSelectionModal extends Modal {
         const fileProcessingList: { pdfFile: TFile, checkbox: HTMLInputElement }[] = [];
 
         for (const pdfFile of pdfFiles) {
-            const mdPath = mdFolder ? `${mdFolder}/${pdfFile.basename}.md` : `${pdfFile.basename}.md`;
-            const mdFileExists = await this.app.vault.adapter.exists(mdPath.replace(/^\//, ''));
+            // パスを構築するのではなく、ファイル名だけで存在をチェック
+            const targetMdName = `${pdfFile.basename}.md`;
+            const mdFileExists = allMarkdownFileNames.has(targetMdName);
+
             const row = tbody.createEl('tr');
             const selectCell = row.createEl('td');
             if (mdFileExists) {
