@@ -197,7 +197,7 @@ export default class PDFToMarkdownPlugin extends Plugin {
           type: "document_url",
           documentUrl: signedUrlResponse.url,
         },
-        include_image_base64: true,
+        includeImageBase64: true,
       });
     } catch (err) {
       console.error(`Error during OCR process for file: ${originalFileName}`, err);
