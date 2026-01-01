@@ -2,7 +2,7 @@
 // Role: Obsidianプラグインの中核。PDFをMistral OCRで解析しMarkdownと画像を生成する。
 // Why: OCR処理とVault書き込み、UI/設定を一箇所で管理するため。
 // Related: manifest.json, styles.css, package.json, README.md
-import { App, Plugin, PluginSettingTab, Setting, TFile, Notice, Modal } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Notice, Modal } from 'obsidian';
 import { Buffer } from 'buffer';
 import { Mistral } from '@mistralai/mistralai';
 
@@ -29,12 +29,14 @@ const IMAGE_EXT_ALIASES: Record<string, string> = {
   svg: 'svg',
 };
 
-const normalizeVaultPath = (input: string): string => input.trim().replace(/^\/+|\/+$/g, '');
+const normalizeVaultPath = (input: string): string => {
+  return input.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+};
 
 const parseDataUrl = (dataUrl: string): { mime: string; buffer: Buffer } | null => {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  const match = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
   if (!match) return null;
-  const buffer = Buffer.from(match[2], 'base64');
+  const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
   if (buffer.length === 0) return null;
   return { mime: match[1].toLowerCase(), buffer };
 };
@@ -195,7 +197,7 @@ export default class PDFToMarkdownPlugin extends Plugin {
           type: "document_url",
           documentUrl: signedUrlResponse.url,
         },
-        includeImageBase64: true,
+        include_image_base64: true,
       });
     } catch (err) {
       console.error(`Error during OCR process for file: ${originalFileName}`, err);
@@ -218,7 +220,15 @@ export default class PDFToMarkdownPlugin extends Plugin {
     const finalMd = await this.combineMarkdownWithImages(ocrResponse, pdfBaseName, finalImagesPath);
 
     // ファイルが存在しないことが確認済みのため、設定に基づいたパスに新規作成
-    await this.app.vault.create(mdFilePath, finalMd);
+    try {
+      await this.app.vault.create(mdFilePath, finalMd);
+    } catch (err) {
+      if (this.isAlreadyExistsError(err)) {
+        new Notice(`Error: "${mdFilePath}" already exists. Processing stopped.`, 7000);
+        return;
+      }
+      throw err;
+    }
   }
 
   /**
@@ -246,9 +256,8 @@ export default class PDFToMarkdownPlugin extends Plugin {
     pdfBaseName: string,
     finalImagesPath: string
   ): Promise<string> {
-    if (!ocrResult.pages || !Array.isArray(ocrResult.pages)) {
-      new Notice("OCR result does not contain pages.");
-      return "";
+    if (!ocrResult.pages || !Array.isArray(ocrResult.pages) || ocrResult.pages.length === 0) {
+      throw new Error("OCR result does not contain pages.");
     }
     const sortedPages = ocrResult.pages.sort((a: any, b: any) => a.index - b.index);
     let combinedMarkdown = "";
@@ -263,14 +272,20 @@ export default class PDFToMarkdownPlugin extends Plugin {
           ? imgObj.imageBase64
           : (typeof imgObj.image_base64 === 'string' ? imgObj.image_base64 : '');
         if (!rawBase64) {
-          throw new Error(`Image data missing for ${rawId}`);
+          console.warn(`Image data missing for ${rawId}`);
+          md = this.removeImageReference(md, rawId);
+          continue;
         }
         if (rawBase64.trim().endsWith("...")) {
-          throw new Error(`Image data truncated for ${rawId}`);
+          console.warn(`Image data truncated for ${rawId}`);
+          md = this.removeImageReference(md, rawId);
+          continue;
         }
         const imageData = this.resolveOcrImageData(rawId, rawBase64);
         if (!imageData) {
-          throw new Error(`Invalid image data for ${rawId}`);
+          console.warn(`Invalid image data for ${rawId}`);
+          md = this.removeImageReference(md, rawId);
+          continue;
         }
         const trimmedId = this.sanitizeFileName(rawId).replace(/\.[^/.]+$/i, '');
         const baseName = trimmedId || `img-${pageNumber}-${imageIndex}`;
@@ -300,6 +315,13 @@ export default class PDFToMarkdownPlugin extends Plugin {
     let current = "";
     for (const part of parts) {
       current = current ? `${current}/${part}` : part;
+      const existing = this.app.vault.getAbstractFileByPath(current);
+      if (existing instanceof TFile) {
+        throw new Error(`Cannot create folder because a file exists at "${current}"`);
+      }
+      if (existing instanceof TFolder) {
+        continue;
+      }
       try {
         await this.app.vault.createFolder(current);
       } catch (err) {
@@ -320,14 +342,47 @@ export default class PDFToMarkdownPlugin extends Plugin {
   private resolveOcrImageData(imageId: string, base64: string): { buffer: Buffer; extension: string } | null {
     const trimmedBase64 = base64.trim();
     const parsed = parseDataUrl(trimmedBase64);
-    const buffer = parsed?.buffer ?? Buffer.from(trimmedBase64, 'base64');
+    const buffer = parsed?.buffer ?? Buffer.from(trimmedBase64.replace(/\s+/g, ''), 'base64');
     if (buffer.length === 0) return null;
-    const extension = extensionFromMime(parsed?.mime) ?? extensionFromImageId(imageId) ?? 'bin';
+    const extension = extensionFromMime(parsed?.mime)
+      ?? extensionFromImageId(imageId)
+      ?? this.detectImageExtensionFromBuffer(buffer)
+      ?? 'bin';
     return { buffer, extension };
   }
 
   private sanitizeFileName(input: string): string {
-    return input.replace(/[\\/]/g, '_').trim();
+    // Windows予約文字と制御文字を避ける
+    return input
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[. ]+$/g, '');
+  }
+
+  private removeImageReference(markdown: string, imageId: string): string {
+    if (!imageId) return markdown;
+    const escapedId = imageId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\!\\[[^\\]]*\\]\\((?:.*?)${escapedId}(?:.*?)\\)`, 'g');
+    return markdown.replace(regex, '');
+  }
+
+  private detectImageExtensionFromBuffer(buffer: Buffer): string | null {
+    if (buffer.length < 12) return null;
+    // 代表的な画像形式だけを軽く判定する
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return 'jpg';
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return 'png';
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'gif';
+    if (buffer[0] === 0x42 && buffer[1] === 0x4D) return 'bmp';
+    if (buffer[0] === 0x49 && buffer[1] === 0x49 && buffer[2] === 0x2A) return 'tiff';
+    if (buffer[0] === 0x4D && buffer[1] === 0x4D && buffer[2] === 0x00 && buffer[3] === 0x2A) return 'tiff';
+    if (
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46
+      && buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+    ) {
+      return 'webp';
+    }
+    return null;
   }
 
   private isAlreadyExistsError(err: unknown): boolean {
