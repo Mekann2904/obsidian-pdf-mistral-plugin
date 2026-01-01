@@ -1,13 +1,54 @@
+// File: /Users/mekann/obsidian/.obsidian/plugins/obsidian-pdf-mistral-plugin/main.ts
+// Role: Obsidianプラグインの中核。PDFをMistral OCRで解析しMarkdownと画像を生成する。
+// Why: OCR処理とVault書き込み、UI/設定を一箇所で管理するため。
+// Related: manifest.json, styles.css, package.json, README.md
 import { App, Plugin, PluginSettingTab, Setting, TFile, Notice, Modal } from 'obsidian';
 import { Buffer } from 'buffer';
 import { Mistral } from '@mistralai/mistralai';
 
-/**
- * OCR 結果の pages[].images[].id と、そのBase64画像データ(imageBase64)を扱う想定。
- */
-interface InlineImageMap {
-  [imageId: string]: string;  // 例: { "img-0.jpeg": "data:image/jpeg;base64,..." }
-}
+const IMAGE_MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/tiff': 'tiff',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+};
+
+const IMAGE_EXT_ALIASES: Record<string, string> = {
+  jpg: 'jpg',
+  jpeg: 'jpg',
+  png: 'png',
+  webp: 'webp',
+  tiff: 'tiff',
+  tif: 'tiff',
+  gif: 'gif',
+  bmp: 'bmp',
+  svg: 'svg',
+};
+
+const normalizeVaultPath = (input: string): string => input.trim().replace(/^\/+|\/+$/g, '');
+
+const parseDataUrl = (dataUrl: string): { mime: string; buffer: Buffer } | null => {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  const buffer = Buffer.from(match[2], 'base64');
+  if (buffer.length === 0) return null;
+  return { mime: match[1].toLowerCase(), buffer };
+};
+
+const extensionFromMime = (mime?: string): string | null => {
+  if (!mime) return null;
+  return IMAGE_MIME_TO_EXT[mime.toLowerCase()] ?? null;
+};
+
+const extensionFromImageId = (imageId: string): string | null => {
+  const match = imageId.match(/\.([a-z0-9]+)$/i);
+  if (!match) return null;
+  return IMAGE_EXT_ALIASES[match[1].toLowerCase()] ?? null;
+};
 
 /**
  * プラグインの設定項目
@@ -112,17 +153,16 @@ export default class PDFToMarkdownPlugin extends Plugin {
    * Mistral APIを使ってPDFをOCRする共通の内部ロジック
    */
   async processPDFInternal(pdfContent: ArrayBuffer, pdfBaseName: string, originalFileName: string): Promise<void> {
-    // ★★★★★ ここからが修正箇所 ★★★★★
-    // 安全装置：処理の最初に、同名ファイルがVault内に存在しないか最終チェック
     const targetMdName = `${pdfBaseName}.md`;
-    const existingMdFile = this.app.vault.getMarkdownFiles().find(f => f.name === targetMdName);
+    const mdFolder = normalizeVaultPath(this.settings.markdownOutputFolder);
+    const mdFilePath = mdFolder ? `${mdFolder}/${targetMdName}` : targetMdName;
+    const mdExistsInVault = this.app.vault.getAbstractFileByPath(mdFilePath) !== null;
+    const mdExistsOnDisk = await this.app.vault.adapter.exists(mdFilePath);
 
-    if (existingMdFile) {
-      // ファイルが既に存在する場合、上書きを防ぐために処理を中断し、ユーザーに通知
-      new Notice(`Error: "${targetMdName}" already exists. Processing stopped.`, 7000);
+    if (mdExistsInVault || mdExistsOnDisk) {
+      new Notice(`Error: "${mdFilePath}" already exists. Processing stopped.`, 7000);
       return;
     }
-    // ★★★★★ ここまでが修正箇所 ★★★★★
 
     const apiKey = this.settings.mistralApiKey.trim();
     if (!apiKey) {
@@ -161,12 +201,11 @@ export default class PDFToMarkdownPlugin extends Plugin {
       console.error(`Error during OCR process for file: ${originalFileName}`, err);
       throw err;
     }
-    const mdFolder = this.settings.markdownOutputFolder.trim();
     if (mdFolder) {
-      await this.createFolderIfNotExists(mdFolder);
+      await this.ensureFolderExists(mdFolder);
     }
-    const baseFolder = this.settings.imagesOutputFolder.trim();
-    const folderName = this.settings.imagesFolderName.trim() || "pdf-mistral-images";
+    const baseFolder = normalizeVaultPath(this.settings.imagesOutputFolder);
+    const folderName = normalizeVaultPath(this.settings.imagesFolderName) || "pdf-mistral-images";
     let finalImagesPath = "";
     if (baseFolder && folderName) {
       finalImagesPath = `${baseFolder}/${folderName}`;
@@ -175,13 +214,10 @@ export default class PDFToMarkdownPlugin extends Plugin {
     } else {
       finalImagesPath = folderName;
     }
-    await this.createFolderIfNotExists(finalImagesPath);
+    await this.ensureFolderExists(finalImagesPath);
     const finalMd = await this.combineMarkdownWithImages(ocrResponse, pdfBaseName, finalImagesPath);
 
     // ファイルが存在しないことが確認済みのため、設定に基づいたパスに新規作成
-    const mdFilePath = mdFolder
-      ? `${mdFolder}/${targetMdName}`
-      : targetMdName;
     await this.app.vault.create(mdFilePath, finalMd);
   }
 
@@ -216,23 +252,38 @@ export default class PDFToMarkdownPlugin extends Plugin {
     }
     const sortedPages = ocrResult.pages.sort((a: any, b: any) => a.index - b.index);
     let combinedMarkdown = "";
-    for (const page of sortedPages) {
+    for (const [pageIndex, page] of sortedPages.entries()) {
+      const pageNumber = typeof page.index === 'number' ? page.index : pageIndex;
       let md = page.markdown || "";
-      for (const imgObj of page.images || []) {
-        const originalId = imgObj.id;
-        const base64 = imgObj.imageBase64;
-        if (!base64 || base64.endsWith("...")) {
-          console.warn(`Skipping empty or placeholder image: ${originalId}`);
-          continue;
+      for (const [imageIndex, imgObj] of (page.images || []).entries()) {
+        const rawId = typeof imgObj.id === 'string' && imgObj.id.trim()
+          ? imgObj.id.trim()
+          : `img-${pageNumber}-${imageIndex}`;
+        const rawBase64 = typeof imgObj.imageBase64 === 'string'
+          ? imgObj.imageBase64
+          : (typeof imgObj.image_base64 === 'string' ? imgObj.image_base64 : '');
+        if (!rawBase64) {
+          throw new Error(`Image data missing for ${rawId}`);
         }
-        const trimmedId = originalId.replace(/\.(jpg|jpeg)$/i, '');
-        const imageFileName = `${pdfBaseName}_${trimmedId}.jpeg`;
+        if (rawBase64.trim().endsWith("...")) {
+          throw new Error(`Image data truncated for ${rawId}`);
+        }
+        const imageData = this.resolveOcrImageData(rawId, rawBase64);
+        if (!imageData) {
+          throw new Error(`Invalid image data for ${rawId}`);
+        }
+        const trimmedId = this.sanitizeFileName(rawId).replace(/\.[^/.]+$/i, '');
+        const baseName = trimmedId || `img-${pageNumber}-${imageIndex}`;
+        const imageFileName = `${this.sanitizeFileName(pdfBaseName)}_${baseName}.${imageData.extension}`;
         const imageFilePath = `${finalImagesPath}/${imageFileName}`;
-        await this.saveBase64Image(base64, imageFilePath);
-        const escapedOriginalId = originalId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`\\!\\[[^\\]]*\\]\\((?:.*?)${escapedOriginalId}(?:.*?)\\)`, 'g');
-        const obsidianLink = `![[${imageFilePath.replace(/\\/g, '/')}]]`;
-        md = md.replace(regex, obsidianLink);
+        await this.saveImageBuffer(imageData.buffer, imageFilePath);
+
+        if (typeof imgObj.id === 'string' && imgObj.id.trim()) {
+          const escapedOriginalId = rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const regex = new RegExp(`\\!\\[[^\\]]*\\]\\((?:.*?)${escapedOriginalId}(?:.*?)\\)`, 'g');
+          const obsidianLink = `![[${imageFilePath.replace(/\\/g, '/')}]]`;
+          md = md.replace(regex, obsidianLink);
+        }
       }
       combinedMarkdown += md + "\n\n";
     }
@@ -240,26 +291,48 @@ export default class PDFToMarkdownPlugin extends Plugin {
   }
 
   /**
-   * 指定フォルダが無ければ作成する
+   * 競合に強い形でフォルダを作成する
    */
-  async createFolderIfNotExists(folderPath: string): Promise<void> {
-    const cleanPath = folderPath.trim().replace(/^\/|\/$/g, '');
-    if (cleanPath && !(await this.app.vault.adapter.exists(cleanPath))) {
-      await this.app.vault.createFolder(cleanPath);
+  async ensureFolderExists(folderPath: string): Promise<void> {
+    const cleanPath = normalizeVaultPath(folderPath);
+    if (!cleanPath) return;
+    const parts = cleanPath.split('/').filter(Boolean);
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      try {
+        await this.app.vault.createFolder(current);
+      } catch (err) {
+        if (!this.isAlreadyExistsError(err)) {
+          throw err;
+        }
+      }
     }
   }
 
   /**
-   * Base64文字列(形式: "data:image/jpeg;base64,...")をバイナリに変換し、Vault内に書き込む
+   * 画像バッファをVault内に書き込む
    */
-  async saveBase64Image(base64: string, filePath: string): Promise<void> {
-    const matches = base64.match(/^data:image\/jpeg;base64,(.+)/);
-    if (!matches || matches.length < 2) {
-      console.error("Invalid Base64 image format (prefix missing or wrong type):", base64.substring(0, 50));
-      return;
-    }
-    const buffer = Buffer.from(matches[1], "base64");
+  async saveImageBuffer(buffer: Buffer, filePath: string): Promise<void> {
     await this.app.vault.adapter.writeBinary(filePath, buffer);
+  }
+
+  private resolveOcrImageData(imageId: string, base64: string): { buffer: Buffer; extension: string } | null {
+    const trimmedBase64 = base64.trim();
+    const parsed = parseDataUrl(trimmedBase64);
+    const buffer = parsed?.buffer ?? Buffer.from(trimmedBase64, 'base64');
+    if (buffer.length === 0) return null;
+    const extension = extensionFromMime(parsed?.mime) ?? extensionFromImageId(imageId) ?? 'bin';
+    return { buffer, extension };
+  }
+
+  private sanitizeFileName(input: string): string {
+    return input.replace(/[\\/]/g, '_').trim();
+  }
+
+  private isAlreadyExistsError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.toLowerCase().includes('already exists') || message.includes('EEXIST');
   }
 
   async loadSettings() {
@@ -298,8 +371,8 @@ class PDFSelectionModal extends Modal {
             return;
         }
 
-        // Vault内の全Markdownファイル名一覧を先に取得し、高速で検索できるようにSetに格納
-        const allMarkdownFileNames = new Set(this.app.vault.getMarkdownFiles().map(f => f.name));
+        const mdFolder = normalizeVaultPath(this.plugin.settings.markdownOutputFolder);
+        const allMarkdownFilePaths = new Set(this.app.vault.getMarkdownFiles().map(f => f.path));
 
         const tableContainer = contentEl.createDiv({ cls: 'pdf-list-container' });
         tableContainer.style.maxHeight = '50vh';
@@ -318,9 +391,9 @@ class PDFSelectionModal extends Modal {
         const fileProcessingList: { pdfFile: TFile, checkbox: HTMLInputElement }[] = [];
 
         for (const pdfFile of pdfFiles) {
-            // パスを構築するのではなく、ファイル名だけで存在をチェック
             const targetMdName = `${pdfFile.basename}.md`;
-            const mdFileExists = allMarkdownFileNames.has(targetMdName);
+            const targetMdPath = mdFolder ? `${mdFolder}/${targetMdName}` : targetMdName;
+            const mdFileExists = allMarkdownFilePaths.has(targetMdPath);
 
             const row = tbody.createEl('tr');
             const selectCell = row.createEl('td');
