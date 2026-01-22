@@ -2,7 +2,7 @@
 // Role: Obsidianプラグインの中核。PDFをMistral OCRで解析しMarkdownと画像を生成する。
 // Why: OCR処理とVault書き込み、UI/設定を一箇所で管理するため。
 // Related: manifest.json, styles.css, package.json, README.md
-import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Notice, Modal } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Notice, Modal, Editor, Menu, MarkdownView } from 'obsidian';
 import { Buffer } from 'buffer';
 import { Mistral } from '@mistralai/mistralai';
 
@@ -108,6 +108,12 @@ export default class PDFToMarkdownPlugin extends Plugin {
 
     // 設定タブ
     this.addSettingTab(new PDFToMarkdownSettingTab(this.app, this));
+
+    this.registerEvent(
+      this.app.workspace.on('editor-menu', (menu: Menu, editor: Editor, view: MarkdownView) => {
+        this.addImageOcrMenuItem(menu, editor, view);
+      })
+    );
   }
 
   onunload() {
@@ -229,6 +235,133 @@ export default class PDFToMarkdownPlugin extends Plugin {
       }
       throw err;
     }
+  }
+
+  private addImageOcrMenuItem(menu: Menu, editor: Editor, view: MarkdownView): void {
+    const cursor = editor.getCursor();
+    const lineText = editor.getLine(cursor.line);
+    const imageLink = this.extractImageLinkFromLine(lineText);
+    if (!imageLink) return;
+
+    menu.addItem((item) => {
+      item
+        .setTitle('OCR image (Mistral)')
+        .setIcon('scan')
+        .onClick(async () => {
+          await this.handleImageOcrRequest(editor, view, cursor.line, lineText, imageLink);
+        });
+    });
+  }
+
+  private extractImageLinkFromLine(lineText: string): string | null {
+    const embedMatch = lineText.match(/!\[\[([^\]]+)\]\]/);
+    if (embedMatch) {
+      const raw = embedMatch[1].trim();
+      if (!raw) return null;
+      return raw.split('|')[0].trim();
+    }
+
+    const markdownMatch = lineText.match(/!\[[^\]]*\]\(([^)]+)\)/);
+    if (markdownMatch) {
+      let raw = markdownMatch[1].trim();
+      if (!raw) return null;
+      raw = raw.replace(/^<(.+)>$/, '$1').trim();
+      return raw.split(/\s+/)[0].trim();
+    }
+
+    return null;
+  }
+
+  private resolveImageFile(linkPath: string, view: MarkdownView): TFile | null {
+    const normalized = linkPath.replace(/\\/g, '/');
+    const activePath = view?.file?.path ?? '';
+    const resolved = this.app.metadataCache.getFirstLinkpathDest(normalized, activePath);
+    if (resolved instanceof TFile && this.isImageFile(resolved)) {
+      return resolved;
+    }
+    const direct = this.app.vault.getAbstractFileByPath(normalized);
+    if (direct instanceof TFile && this.isImageFile(direct)) {
+      return direct;
+    }
+    return null;
+  }
+
+  private isImageFile(file: TFile): boolean {
+    return Boolean(IMAGE_EXT_ALIASES[file.extension.toLowerCase()]);
+  }
+
+  private async handleImageOcrRequest(
+    editor: Editor,
+    view: MarkdownView,
+    lineNumber: number,
+    lineText: string,
+    imageLink: string
+  ): Promise<void> {
+    if (/^https?:\/\//i.test(imageLink)) {
+      new Notice('External image URLs are not supported for OCR.');
+      return;
+    }
+
+    const targetFile = this.resolveImageFile(imageLink, view);
+    if (!targetFile) {
+      new Notice('Image file not found in vault.');
+      return;
+    }
+
+    new Notice(`OCR processing: ${targetFile.name}`);
+
+    try {
+      const ocrText = await this.processImageOcr(targetFile);
+      const insertion = `\n\`\`\`text\n${ocrText}\n\`\`\`\n`;
+      editor.replaceRange(insertion, { line: lineNumber, ch: lineText.length });
+      new Notice(`OCR complete: ${targetFile.name}`);
+    } catch (err) {
+      console.error('Image OCR failed:', err);
+      new Notice('OCR failed. Check console for details.');
+    }
+  }
+
+  private async processImageOcr(imageFile: TFile): Promise<string> {
+    const apiKey = this.settings.mistralApiKey.trim();
+    if (!apiKey) {
+      throw new Error('Mistral API key is not set in settings.');
+    }
+    const client = new Mistral({ apiKey });
+    const arrayBuffer = await this.app.vault.readBinary(imageFile);
+    const fileBuffer = Buffer.from(arrayBuffer);
+    const uploaded = await client.files.upload({
+      file: { fileName: imageFile.name, content: fileBuffer },
+      purpose: 'ocr' as any,
+    });
+    const signedUrlResponse = await client.files.getSignedUrl({ fileId: uploaded.id });
+    const ocrResponse = await client.ocr.process({
+      model: 'mistral-ocr-latest',
+      document: {
+        type: 'document_url',
+        documentUrl: signedUrlResponse.url,
+      },
+    });
+    const extractedText = this.extractOcrText(ocrResponse);
+    if (!extractedText) {
+      throw new Error('OCR result was empty.');
+    }
+    return extractedText;
+  }
+
+  private extractOcrText(ocrResponse: any): string {
+    if (ocrResponse?.pages && Array.isArray(ocrResponse.pages)) {
+      const fragments = ocrResponse.pages
+        .map((page: any) => page?.markdown || page?.text || '')
+        .map((value: string) => value.trim())
+        .filter(Boolean);
+      if (fragments.length > 0) {
+        return fragments.join('\n\n');
+      }
+    }
+    if (typeof ocrResponse?.text === 'string' && ocrResponse.text.trim()) {
+      return ocrResponse.text.trim();
+    }
+    return '';
   }
 
   /**

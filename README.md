@@ -11,6 +11,7 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 - 画像をBase64形式で抽出し、Obsidian Vault内に保存
 - Markdownファイルに画像をObsidian独自リンク（![[...]]）として埋め込み
 - Mistral APIを利用したOCR処理
+- Markdown中の画像を右クリックしてOCR結果を直下に挿入
 
 ## インストール
 1. Obsidianのプラグインフォルダ (`<Vault>/.obsidian/plugins/`) に移動
@@ -36,6 +37,10 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 2. **出力の確認**
    - 設定したMarkdownフォルダ内に `.md` ファイルが生成される
    - 画像は設定したフォルダに保存され、Markdown内で `![[...]]` としてリンクされる
+
+3. **Markdown中の画像をOCR**
+   - 画像行を右クリックして `OCR image (Mistral)` を選択
+   - 画像直下に ```text``` 形式でOCR結果が挿入される
 
 
 [Youtubeで簡単なデモ: https://www.youtube.com/watch?v=JLmnChX2uIk](https://www.youtube.com/watch?v=JLmnChX2uIk)
