@@ -23,6 +23,7 @@
 	},
 	"dependencies": {
 		"@mistralai/mistralai": "^1.5.1",
-		"jimp": "^1.6.0"
+		"jimp": "^1.6.0",
+		"pdfjs-dist": "3.11.174"
 	}
 }

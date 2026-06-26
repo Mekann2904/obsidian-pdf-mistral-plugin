@@ -1,6 +1,20 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
+import { copyFileSync } from "fs";
+import { createRequire } from "module";
+import path from "path";
+
+const require = createRequire(import.meta.url);
+
+function copyPdfWorker() {
+	const workerSource = require.resolve("pdfjs-dist/legacy/build/pdf.worker.min.js");
+	const workerDestination = path.join(process.cwd(), "pdf.worker.min.js");
+	copyFileSync(workerSource, workerDestination);
+	console.log(`Copied pdf.js worker to ${workerDestination}`);
+}
+
+copyPdfWorker();
 
 const banner =
 `/*
