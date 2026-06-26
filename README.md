@@ -28,7 +28,7 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 | Markdown Output Folder | 変換されたMarkdownを保存するフォルダ（Vaultルートからの相対パス） |
 | Images Output Folder | 画像を保存する基準パス（Vaultルートからの相対パス） |
 | Images Folder Name | 画像を保存するフォルダ名（デフォルト: `pdf-mistral-images`） |
-| Mistral API Key | Mistral APIのキーを設定 |
+| Mistral API Key | Obsidian SecretStorage に保存した Mistral API キーを選択（キー本体は `data.json` に保存しません） |
 | Enable High-Resolution Figure Extraction | PDF.js でページをレンダリングし、Mistral の座標で図表を高解像度クロップする（推奨DPI区間: 150-600） |
 | Image Render DPI | 高解像度抽出時のレンダリングDPI（デフォルト: 300）。「Enable High-Resolution Figure Extraction」がONのときのみ表示 |
 
@@ -50,7 +50,7 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 [Youtubeで簡単なデモ: https://www.youtube.com/watch?v=JLmnChX2uIk](https://www.youtube.com/watch?v=JLmnChX2uIk)
 
 ## 注意事項
-- Mistral APIの利用にはAPIキーが必要です。
+- Mistral APIの利用にはAPIキーが必要です。APIキーは Obsidian 1.11.4+ の SecretStorage で管理します。
 - OCRの精度はMistral APIのバージョンや品質によって異なります。
 - PDFの内容によっては、画像やレイアウトの崩れが発生する可能性があります。
 

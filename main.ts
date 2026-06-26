@@ -81,8 +81,6 @@ interface PDFToMarkdownSettings {
   // デフォルトは "pdf-mistral-images"
   imagesFolderName: string;
 
-  // Mistral API key
-  mistralApiKey: string;
 
   // 一括処理時の最大並列実行数
   parallelProcessingLimit: number;
@@ -97,11 +95,12 @@ interface PDFToMarkdownSettings {
 /**
  * 設定項目のデフォルト値
  */
+const MISTRAL_API_KEY_SECRET_ID = 'pdf-mistral-plugin-mistral-api-key';
+
 const DEFAULT_SETTINGS: PDFToMarkdownSettings = {
   markdownOutputFolder: '',
   imagesOutputFolder: '',
   imagesFolderName: 'pdf-mistral-images',
-  mistralApiKey: '',
   parallelProcessingLimit: 3,
   enableHighResFigures: true,
   imageRenderDPI: DEFAULT_IMAGE_RENDER_DPI,
@@ -195,7 +194,7 @@ export default class PDFToMarkdownPlugin extends Plugin {
       return;
     }
 
-    const apiKey = this.settings.mistralApiKey.trim();
+    const apiKey = this.getMistralApiKey();
     if (!apiKey) {
       throw new Error("Mistral API key is not set in settings.");
     }
@@ -365,7 +364,7 @@ export default class PDFToMarkdownPlugin extends Plugin {
   }
 
   private async processImageOcr(imageFile: TFile): Promise<string> {
-    const apiKey = this.settings.mistralApiKey.trim();
+    const apiKey = this.getMistralApiKey();
     if (!apiKey) {
       throw new Error('Mistral API key is not set in settings.');
     }
@@ -630,14 +629,77 @@ export default class PDFToMarkdownPlugin extends Plugin {
     return message.toLowerCase().includes('already exists') || message.includes('EEXIST');
   }
 
+  getMistralApiKey(): string {
+    return this.app.secretStorage.getSecret(MISTRAL_API_KEY_SECRET_ID)?.trim() ?? '';
+  }
+
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loadedData = await this.loadData() ?? {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
+
+    // 旧バージョンでは API キー本体を data.json に保存していたため、SecretStorage へ移行する。
+    const legacyApiKey = typeof loadedData.mistralApiKey === 'string' ? loadedData.mistralApiKey.trim() : '';
+    if (legacyApiKey && !this.getMistralApiKey()) {
+      this.app.secretStorage.setSecret(MISTRAL_API_KEY_SECRET_ID, legacyApiKey);
+      await this.saveSettings();
+    }
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    const { mistralApiKey, mistralApiKeySecretId, ...settingsToSave } = this.settings as PDFToMarkdownSettings & { mistralApiKey?: string; mistralApiKeySecretId?: string };
+    await this.saveData(settingsToSave);
   }
 }
+
+class MistralApiKeyModal extends Modal {
+  private onSubmit: (apiKey: string) => Promise<void>;
+
+  constructor(app: App, onSubmit: (apiKey: string) => Promise<void>) {
+    super(app);
+    this.onSubmit = onSubmit;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'Set Mistral API Key' });
+    contentEl.createEl('p', { text: 'The API key will be stored in Obsidian SecretStorage, not in data.json.' });
+
+    let apiKey = '';
+    new Setting(contentEl)
+      .setName('API Key')
+      .addText(text => {
+        text.inputEl.type = 'password';
+        text
+          .setPlaceholder('Enter your Mistral API key')
+          .onChange((value) => {
+            apiKey = value.trim();
+          });
+      });
+
+    new Setting(contentEl)
+      .addButton(button => button
+        .setButtonText('Cancel')
+        .onClick(() => this.close()))
+      .addButton(button => button
+        .setCta()
+        .setButtonText('Save')
+        .onClick(async () => {
+          if (!apiKey) {
+            new Notice('API key is empty.');
+            return;
+          }
+          await this.onSubmit(apiKey);
+          new Notice('Mistral API key saved.');
+          this.close();
+        }));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 
 /**
  * PDF選択と並列処理のためのモーダル
@@ -838,16 +900,18 @@ class PDFToMarkdownSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Mistral API Key')
-      .setDesc('Your Mistral API key. Keep it private!')
-      .addText(text => {
-        text
-          .setPlaceholder('Enter your Mistral API key here')
-          .setValue(this.plugin.settings.mistralApiKey)
-          .onChange(async (value) => {
-            this.plugin.settings.mistralApiKey = value.trim();
+      .setDesc(this.plugin.getMistralApiKey()
+        ? 'Stored in Obsidian SecretStorage. Current key is configured.'
+        : 'Stored in Obsidian SecretStorage. No key configured yet.')
+      .addButton(button => button
+        .setButtonText(this.plugin.getMistralApiKey() ? 'Replace API key' : 'Set API key')
+        .onClick(() => {
+          new MistralApiKeyModal(this.app, async (apiKey) => {
+            this.app.secretStorage.setSecret(MISTRAL_API_KEY_SECRET_ID, apiKey);
             await this.plugin.saveSettings();
-          });
-      });
+            this.display();
+          }).open();
+        }));
       
     new Setting(containerEl)
         .setName('Parallel Processing Limit')
