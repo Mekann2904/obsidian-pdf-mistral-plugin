@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-pdf-mistral-plugin",
-	"version": "1.1.0",
+	"version": "1.1.1",
 	"description": "Convert PDFs to Markdown with Mistral OCR, extracting figures at high resolution.",
 	"main": "main.js",
 	"scripts": {
