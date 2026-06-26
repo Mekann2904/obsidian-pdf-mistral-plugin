@@ -11,6 +11,8 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 - 画像をBase64形式で抽出し、Obsidian Vault内に保存
 - Markdownファイルに画像をObsidian独自リンク（![[...]]）として埋め込み
 - Mistral APIを利用したOCR処理
+- **高解像度図表抽出**（PDF.js でページを高DPIレンダリングし、Mistral の座標から図表をクロップ）
+- **LaTeX数式変換**（Mistral OCR の `\( \)` / `\[ \]` を Obsidian MathJax の `$ $` / `$$ $$` に変換）
 - Markdown中の画像を右クリックしてOCR結果を直下に挿入
 
 ## インストール
@@ -27,6 +29,8 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 | Images Output Folder | 画像を保存する基準パス（Vaultルートからの相対パス） |
 | Images Folder Name | 画像を保存するフォルダ名（デフォルト: `pdf-mistral-images`） |
 | Mistral API Key | Mistral APIのキーを設定 |
+| Enable High-Resolution Figure Extraction | PDF.js でページをレンダリングし、Mistral の座標で図表を高解像度クロップする（推奨DPI区間: 150-600） |
+| Image Render DPI | 高解像度抽出時のレンダリングDPI（デフォルト: 300）。「Enable High-Resolution Figure Extraction」がONのときのみ表示 |
 
 ## 使い方
 1. **PDFの変換**
@@ -52,3 +56,6 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 
 ## ライセンス
 MIT License
+
+高解像度図表抽出機能は、以下のコードを参考に実装しました:
+- [gyroid-eth/obsidian-pdf-mistral-hires](https://github.com/gyroid-eth/obsidian-pdf-mistral-hires) by gyroid
