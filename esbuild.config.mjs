@@ -1,20 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
-import { copyFileSync } from "fs";
-import { createRequire } from "module";
-import path from "path";
-
-const require = createRequire(import.meta.url);
-
-function copyPdfWorker() {
-	const workerSource = require.resolve("pdfjs-dist/legacy/build/pdf.worker.min.js");
-	const workerDestination = path.join(process.cwd(), "pdf.worker.min.js");
-	copyFileSync(workerSource, workerDestination);
-	console.log(`Copied pdf.js worker to ${workerDestination}`);
-}
-
-copyPdfWorker();
+import { readFile } from "fs/promises";
 
 const banner =
 `/*
@@ -25,12 +12,30 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = (process.argv[2] === "production");
 
+// pdf.js の worker を文字列として main.js にインライン埋め込みする。
+// 配布を main.js + manifest.json の2ファイルだけで完結させ、別途
+// pdf.worker.min.js をプラグインフォルダに配置する必要をなくす。
+// （Obsidian/BRAT は Release から main.js/manifest.json しか取らないため）
+const inlinePdfWorkerPlugin = {
+	name: "inline-pdf-worker",
+	setup(build) {
+		build.onLoad({ filter: /pdfjs-dist.*pdf\.worker\.min\.js$/ }, async (args) => {
+			const contents = await readFile(args.path, "utf8");
+			return {
+				contents: `export default ${JSON.stringify(contents)};`,
+				loader: "js",
+			};
+		});
+	},
+};
+
 const context = await esbuild.context({
 	banner: {
 		js: banner,
 	},
 	entryPoints: ["main.ts"],
 	bundle: true,
+	plugins: [inlinePdfWorkerPlugin],
 	external: [
 		"obsidian",
 		"electron",

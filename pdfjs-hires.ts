@@ -6,8 +6,8 @@
 // Related: main.ts
 
 import { Buffer } from 'buffer';
-import type { App } from 'obsidian';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import workerCode from 'pdfjs-dist/legacy/build/pdf.worker.min.js';
 import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api';
 
 export type { PDFDocumentProxy };
@@ -58,10 +58,14 @@ export function clampDpi(value: number): number {
   return clamp(Math.round(value), MIN_IMAGE_RENDER_DPI, MAX_IMAGE_RENDER_DPI);
 }
 
-/** PDF.js ワーカーをプラグイン同梱の pdf.worker.min.js に向ける。 */
-export function configurePdfWorker(app: App, pluginId: string, pluginDir?: string): void {
-  const dir = pluginDir ?? `.obsidian/plugins/${pluginId}`;
-  pdfjsLib.GlobalWorkerOptions.workerSrc = app.vault.adapter.getResourcePath(`${dir}/pdf.worker.min.js`);
+/**
+ * PDF.js ワーカーを設定する。外部ファイルではなく、インライン埋め込みした
+ * worker コードから Blob URL を生成して使う。これにより配布ファイルを
+ * main.js + manifest.json の2つだけにでき、pdf.worker.min.js の別途配置が不要になる。
+ */
+export function configurePdfWorker(): void {
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
 }
 
 /** PDF バイト列から PDFDocumentProxy を読み込む（呼び出し側が destroy を所有する）。 */

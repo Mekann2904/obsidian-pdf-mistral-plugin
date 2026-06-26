@@ -55,7 +55,8 @@ Markdown内でObsidian独自のリンク形式（![[...]]）として扱うこ�
 - PDFの内容によっては、画像やレイアウトの崩れが発生する可能性があります。
 
 ## ライセンス
-MIT License
+MIT License — 詳細は [LICENSE](LICENSE) およびバンドルライブラリの [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) を参照してください。
 
-高解像度図表抽出機能は、以下のコードを参考に実装しました:
-- [gyroid-eth/obsidian-pdf-mistral-hires](https://github.com/gyroid-eth/obsidian-pdf-mistral-hires) by gyroid
+## 謝辞 / Credits
+- **高解像度図表抽出** の実装は、[gyroid](https://github.com/gyroid-eth) さんのフォーク [gyroid-eth/obsidian-pdf-mistral-hires](https://github.com/gyroid-eth/obsidian-pdf-mistral-hires) のコードを参考にしています。
+- 本プラグインは [Obsidian sample plugin](https://github.com/obsidianmd/obsidian-sample-plugin) のスキャフォールドをベースにしています。

@@ -206,7 +206,7 @@ export default class PDFToMarkdownPlugin extends Plugin {
     let pdfDoc: PDFDocumentProxy | null = null;
     if (this.settings.enableHighResFigures) {
       try {
-        configurePdfWorker(this.app, this.manifest.id, this.manifest.dir);
+        configurePdfWorker();
         pdfDoc = await loadPdfDocument(new Uint8Array(pdfContent.slice(0)));
       } catch (err) {
         console.error(`Error loading PDF with pdf.js. Falling back to Mistral images: ${originalFileName}`, err);
